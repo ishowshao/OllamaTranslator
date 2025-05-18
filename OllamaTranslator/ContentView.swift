@@ -8,6 +8,54 @@
 import SwiftUI
 import AppKit
 import NaturalLanguage
+import Foundation
+
+// MARK: - Ollama API helpers
+private struct OllamaRequest: Codable {
+    let model: String
+    let prompt: String
+    let stream: Bool
+}
+
+private struct OllamaResponse: Codable {
+    let response: String
+}
+
+/// Call the local Ollama server (default port 11434) to translate text.
+/// - Parameters:
+///   - text: Original text that needs translation.
+///   - source: Human‑readable language code produced by `mainLanguage` ("Chinese" / "English").
+/// - Returns: Translated text, or an error description.
+private func translateWithOllama(text: String, source: String) async -> String {
+    // Decide target language & craft prompt
+    let prompt: String
+    switch source {
+    case "Chinese":
+        prompt = "Translate the following content into English:\n\(text)"
+    case "English":
+        prompt = "把接下来的内容翻译成中文：\n\(text)"
+    default:
+        return text     // Unknown language → no translation
+    }
+
+    guard let url = URL(string: "http://127.0.0.1:11434/api/generate") else {
+        return "Invalid Ollama endpoint"
+    }
+
+    let body = OllamaRequest(model: "qwen2.5:1.5b", prompt: prompt, stream: false)
+    do {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let decoded = try JSONDecoder().decode(OllamaResponse.self, from: data)
+        return decoded.response.trimmingCharacters(in: .whitespacesAndNewlines)
+    } catch {
+        return "Translation error: \(error.localizedDescription)"
+    }
+}
 
 struct ContentView: View {
     @State private var inputText: String = ""
@@ -25,9 +73,14 @@ struct ContentView: View {
                         if let clipboard = NSPasteboard.general.string(forType: .string) {
                             inputText = clipboard
                             detectedLanguage = mainLanguage(of: clipboard)
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString("hello", forType: .string)
-                            translation = "hello"
+                            translation = "Translating..."
+                            Task {
+                                let result = await translateWithOllama(text: clipboard,
+                                                                        source: detectedLanguage)
+                                await MainActor.run {
+                                    translation = result
+                                }
+                            }
                         }
                     }
                 }
