@@ -6,14 +6,26 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
+    @State private var inputText: String = ""
+    @FocusState private var isInputFocused: Bool
     var body: some View {
         VStack {
             Image(systemName: "globe")
                 .imageScale(.large)
                 .foregroundStyle(.tint)
-            Text("Hello, world!")
+            TextField("Input", text: $inputText)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .focused($isInputFocused)
+                .onChange(of: isInputFocused) { _, focused in
+                    if focused {
+                        if let clipboard = NSPasteboard.general.string(forType: .string) {
+                            inputText = clipboard
+                        }
+                    }
+                }
         }
         .padding()
     }
