@@ -21,6 +21,11 @@ private struct OllamaResponse: Codable {
     let response: String
 }
 
+/// Decoded JSON payload expected from the model when using structured output.
+private struct TranslationPayload: Codable {
+    let translation: String
+}
+
 /// Call the local Ollama server (default port 11434) to translate text.
 /// - Parameters:
 ///   - text: Original text that needs translation.
@@ -37,20 +42,43 @@ private func translateWithOllama(text: String, source: String) async -> String {
     default:
         return text     // Unknown language → no translation
     }
-
+    
     guard let url = URL(string: "http://127.0.0.1:11434/api/generate") else {
         return "Invalid Ollama endpoint"
     }
-
-    let body = OllamaRequest(model: "qwen2.5:1.5b", prompt: prompt, stream: false)
+    
+    // JSON schema telling the model to return { "translation": "<string>" }
+    let formatSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "translation": ["type": "string"]
+        ],
+        "required": ["translation"]
+    ]
+    
+    let body: [String: Any] = [
+        "model": "qwen2.5:1.5b",
+        "prompt": prompt,
+        "stream": false,
+        "format": formatSchema
+    ]
+    
+    guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else {
+        return "Failed to encode request"
+    }
+    
     do {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(body)
-
+        request.httpBody = bodyData
+        
         let (data, _) = try await URLSession.shared.data(for: request)
         let decoded = try JSONDecoder().decode(OllamaResponse.self, from: data)
+        if let innerData = decoded.response.data(using: .utf8),
+           let payload = try? JSONDecoder().decode(TranslationPayload.self, from: innerData) {
+            return payload.translation.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         return decoded.response.trimmingCharacters(in: .whitespacesAndNewlines)
     } catch {
         return "Translation error: \(error.localizedDescription)"
@@ -76,7 +104,7 @@ struct ContentView: View {
                             translation = "Translating..."
                             Task {
                                 let result = await translateWithOllama(text: clipboard,
-                                                                        source: detectedLanguage)
+                                                                       source: detectedLanguage)
                                 await MainActor.run {
                                     translation = result
                                 }
@@ -88,13 +116,13 @@ struct ContentView: View {
                 .padding(4)
             Text("Detected language: \(detectedLanguage)")
                 .padding(4)
-            Button("Done") {
+            Button("Reset") {
                 isInputFocused = false
                 inputText = ""
                 translation = ""
                 detectedLanguage = ""
             }
-
+            
         }
         .padding()
     }
@@ -104,7 +132,7 @@ struct ContentView: View {
         let recognizer = NLLanguageRecognizer()
         recognizer.processString(text)
         guard let lang = recognizer.dominantLanguage else { return "Unknown" }
-
+        
         switch lang {
         case .simplifiedChinese, .traditionalChinese:
             return "Chinese"
